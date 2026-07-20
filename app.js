@@ -17,9 +17,10 @@
   };
 
   /* ══════════════════════════════════════
-     SUPABASE — cloud sync (ให้ทั้งทีมเห็นข้อมูลเดียวกัน)
-     ตาราง app_kv: key (text, PK) | value (jsonb) | updated_at
-     เก็บ catalog กับ history เป็น 2 แถวใน key-value store เดียวกัน
+     SUPABASE — cloud sync (เก็บเป็นตารางแยกจริง อ่านง่ายใน Table Editor)
+     ตาราง: departments, lines, jigs, checkpoints, templates, history
+     กลยุทธ์: "sync ทั้งก้อน" — เวลาบันทึก จะลบของเก่าทั้งหมดในตารางที่เกี่ยวข้อง
+     แล้ว insert ชุดปัจจุบันใหม่ทั้งหมด (ง่าย ตรงไปตรงมา เหมาะกับทีมขนาดเล็ก)
   ══════════════════════════════════════ */
   const SUPABASE_URL = 'https://iaioolqowkcnhsqrulho.supabase.co';
   const SUPABASE_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImlhaW9vbHFvd2tjbmhzcXJ1bGhvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODQ0OTIwNTcsImV4cCI6MjEwMDA2ODA1N30.Ek5jnCYaQLvhYsbm2r8tqRJr8KCclIBgid_ZMm2E8-w';
@@ -30,63 +31,184 @@
   let _syncing = false; // กัน realtime event ที่มาจาก push ของตัวเองไม่ให้ re-render วนซ้ำ
   const _pushTimers = {};
 
-  // ส่งข้อมูลขึ้น Supabase แบบ debounce (รวมการกดรัวๆ ให้เหลือ request เดียว) — ไม่บล็อก UI
-  function pushToSupabase(key, value) {
-    if (!sb) return;
+  function debouncedPush(key, fn) {
     clearTimeout(_pushTimers[key]);
-    _pushTimers[key] = setTimeout(async () => {
-      if (_syncing) return;
-      try {
-        const { error } = await sb.from('app_kv').upsert({ key, value, updated_at: new Date().toISOString() });
-        if (error) throw error;
-      } catch (e) {
-        console.error('Supabase push error:', key, e);
-      }
-    }, 500);
+    _pushTimers[key] = setTimeout(fn, 500);
   }
 
-  // ดึงข้อมูลล่าสุดจาก Supabase มาทับ localStorage ก่อน render ครั้งแรก (โหลดตอนเปิดแอป)
-  async function pullFromSupabase() {
-    if (!sb) return;
-    try {
-      const { data, error } = await sb.from('app_kv').select('key, value').in('key', ['catalog', 'history']);
-      if (error) throw error;
-      (data || []).forEach(row => {
-        if (row.key === 'catalog' && row.value) localStorage.setItem(SK.catalog, JSON.stringify(row.value));
-        if (row.key === 'history' && row.value) localStorage.setItem(SK.history, JSON.stringify(row.value));
+  function flattenCheckpoints(jigs) {
+    const rows = [];
+    (jigs || []).forEach(j => {
+      (j.checkpoints || []).forEach(cp => {
+        rows.push({ jig_id: j.id, item_id: cp.id, label: cp.label, sub: cp.sub, method: cp.method, x: cp.x, y: cp.y });
       });
+    });
+    return rows;
+  }
+
+  // ── ส่ง Catalog ขึ้น Supabase (แยกเป็น 5 ตารางจริง) ──
+  async function pushCatalogToSupabase(cat) {
+    if (!sb) return;
+    _syncing = true;
+    try {
+      // ลบข้อมูลเก่าก่อน — departments ลบแล้ว lines/jigs/checkpoints จะ cascade ลบตามด้วย (FK ON DELETE CASCADE)
+      await sb.from('departments').delete().not('id', 'is', null);
+      await sb.from('templates').delete().not('id', 'is', null);
+
+      if (cat.depts?.length) {
+        const { error } = await sb.from('departments').insert(cat.depts.map(d => ({ id: d.id, name: d.name })));
+        if (error) throw error;
+      }
+      if (cat.lines?.length) {
+        const { error } = await sb.from('lines').insert(cat.lines.map(l => ({ id: l.id, dept_id: l.deptId, name: l.name })));
+        if (error) throw error;
+      }
+      if (cat.jigs?.length) {
+        const { error } = await sb.from('jigs').insert(cat.jigs.map(j => ({
+          id: j.id, line_id: j.lineId, name: j.name, doc_no: j.docNo || j.id, bg_image: j.bgImage || null
+        })));
+        if (error) throw error;
+        const cpRows = flattenCheckpoints(cat.jigs);
+        if (cpRows.length) {
+          const { error: cpErr } = await sb.from('checkpoints').insert(cpRows);
+          if (cpErr) throw cpErr;
+        }
+      }
+      if (cat.templates?.length) {
+        const { error } = await sb.from('templates').insert(cat.templates.map(t => ({ id: t.id, name: t.name, items: t.items || [] })));
+        if (error) throw error;
+      }
     } catch (e) {
-      console.warn('Supabase pull error (ใช้ข้อมูลใน local แทน):', e);
+      console.error('pushCatalogToSupabase error:', e);
+    } finally {
+      setTimeout(() => { _syncing = false; }, 300);
+    }
+  }
+
+  // ── ดึง Catalog จาก Supabase กลับมาประกอบเป็น object เดิม ──
+  async function pullCatalogFromSupabase() {
+    if (!sb) return null;
+    try {
+      const [d, l, j, c, t] = await Promise.all([
+        sb.from('departments').select('*'),
+        sb.from('lines').select('*'),
+        sb.from('jigs').select('*'),
+        sb.from('checkpoints').select('*'),
+        sb.from('templates').select('*'),
+      ]);
+      const err = d.error || l.error || j.error || c.error || t.error;
+      if (err) throw err;
+
+      const cpByJig = {};
+      (c.data || []).forEach(row => {
+        if (!cpByJig[row.jig_id]) cpByJig[row.jig_id] = [];
+        cpByJig[row.jig_id].push({ id: row.item_id, label: row.label, sub: row.sub, method: row.method, x: row.x, y: row.y });
+      });
+      const jigs = (j.data || []).map(row => ({
+        id: row.id, lineId: row.line_id, name: row.name, docNo: row.doc_no,
+        bgImage: row.bg_image || undefined,
+        checkpoints: (cpByJig[row.id] || []).sort((a, b) => a.id - b.id),
+      }));
+      const depts = (d.data || []).map(row => ({ id: row.id, name: row.name }));
+      const lines = (l.data || []).map(row => ({ id: row.id, deptId: row.dept_id, name: row.name }));
+      const templates = (t.data || []).map(row => ({ id: row.id, name: row.name, items: row.items || [] }));
+
+      if (!depts.length && !jigs.length) return null; // ยังไม่เคย sync ขึ้นเลย — ใช้ข้อมูล local ต่อไป
+      return { depts, lines, jigs, templates };
+    } catch (e) {
+      console.warn('pullCatalogFromSupabase error (ใช้ข้อมูล local แทน):', e);
+      return null;
+    }
+  }
+
+  // ── ส่ง History ขึ้น Supabase (ตาราง history จริง 1 แถวต่อ 1 รายการตรวจ) ──
+  async function pushHistoryToSupabase(arr) {
+    if (!sb) return;
+    _syncing = true;
+    try {
+      await sb.from('history').delete().not('id', 'is', null);
+      const rows = (arr || []).map(h => ({
+        id: h.id, ts: h.timestamp,
+        dept_id: h.deptId, dept_name: h.deptName,
+        line_id: h.lineId, line_name: h.lineName,
+        jig_id: h.jigId, jig_name: h.jigName, jig_doc_no: h.jigDocNo,
+        insp_date: h.date, shift: h.shift, month: h.month,
+        inspector: h.inspector, notes: h.notes, items: h.items || [],
+        sig_inspector: h.sigInspector, sig_supervisor: h.sigSupervisor,
+      }));
+      // แบ่งส่งเป็นชุดๆ (มีรูปถ่าย base64 อยู่ในนั้น ก้อนใหญ่ได้) กันพัง request เดียวโตเกินไป
+      for (let i = 0; i < rows.length; i += 40) {
+        const { error } = await sb.from('history').insert(rows.slice(i, i + 40));
+        if (error) throw error;
+      }
+    } catch (e) {
+      console.error('pushHistoryToSupabase error:', e);
+    } finally {
+      setTimeout(() => { _syncing = false; }, 300);
+    }
+  }
+
+  // ── ดึง History จาก Supabase กลับมาเป็น array เดิม ──
+  async function pullHistoryFromSupabase() {
+    if (!sb) return null;
+    try {
+      const { data, error } = await sb.from('history').select('*').order('ts', { ascending: false });
+      if (error) throw error;
+      if (!data || !data.length) return null;
+      return data.map(row => ({
+        id: row.id, timestamp: row.ts,
+        deptId: row.dept_id, deptName: row.dept_name,
+        lineId: row.line_id, lineName: row.line_name,
+        jigId: row.jig_id, jigName: row.jig_name, jigDocNo: row.jig_doc_no,
+        date: row.insp_date, shift: row.shift, month: row.month,
+        inspector: row.inspector, notes: row.notes, items: row.items || [],
+        sigInspector: row.sig_inspector, sigSupervisor: row.sig_supervisor,
+      }));
+    } catch (e) {
+      console.warn('pullHistoryFromSupabase error (ใช้ข้อมูล local แทน):', e);
+      return null;
     }
   }
 
   // ฟังการเปลี่ยนแปลง realtime จากเพื่อนร่วมทีมคนอื่น แล้วรีเฟรชหน้าจอให้อัตโนมัติ
   function subscribeRealtime() {
     if (!sb) return;
-    sb.channel('app_kv_changes')
-      .on('postgres_changes', { event: '*', schema: 'public', table: 'app_kv' }, payload => {
-        const row = payload.new;
-        if (!row || !row.key) return;
-        _syncing = true;
-        try {
-          if (row.key === 'catalog' && row.value) {
-            localStorage.setItem(SK.catalog, JSON.stringify(row.value));
-            loadCatalog();
-            renderFilter();
-            if (typeof renderAdminLists === 'function') renderAdminLists();
-            toast('📥 Catalog อัปเดตจากทีม', 'ok');
-          }
-          if (row.key === 'history' && row.value) {
-            localStorage.setItem(SK.history, JSON.stringify(row.value));
-            if (typeof populateHistoryPanel === 'function') populateHistoryPanel();
-            if (typeof refreshDashboard === 'function') refreshDashboard();
-            toast('📥 มีข้อมูลตรวจสอบใหม่จากทีม', 'ok');
-          }
-        } finally {
-          setTimeout(() => { _syncing = false; }, 100);
-        }
-      })
-      .subscribe();
+    let catalogTimer, historyTimer;
+
+    async function refreshCatalog() {
+      if (_syncing) return;
+      const remote = await pullCatalogFromSupabase();
+      if (remote) {
+        localStorage.setItem(SK.catalog, JSON.stringify(remote));
+        loadCatalog();
+        renderFilter();
+        if (typeof renderAdminLists === 'function') renderAdminLists();
+        toast('📥 Catalog อัปเดตจากทีม', 'ok');
+      }
+    }
+    async function refreshHistory() {
+      if (_syncing) return;
+      const remote = await pullHistoryFromSupabase();
+      if (remote) {
+        localStorage.setItem(SK.history, JSON.stringify(remote));
+        if (typeof populateHistoryPanel === 'function') populateHistoryPanel();
+        if (typeof refreshDashboard === 'function') refreshDashboard();
+        toast('📥 มีข้อมูลตรวจสอบใหม่จากทีม', 'ok');
+      }
+    }
+
+    const ch = sb.channel('db_changes');
+    ['departments', 'lines', 'jigs', 'checkpoints', 'templates'].forEach(tbl => {
+      ch.on('postgres_changes', { event: '*', schema: 'public', table: tbl }, () => {
+        clearTimeout(catalogTimer);
+        catalogTimer = setTimeout(refreshCatalog, 700);
+      });
+    });
+    ch.on('postgres_changes', { event: '*', schema: 'public', table: 'history' }, () => {
+      clearTimeout(historyTimer);
+      historyTimer = setTimeout(refreshHistory, 700);
+    });
+    ch.subscribe();
   }
 
   /* ══════════════════════════════════════
@@ -186,7 +308,7 @@
       console.error('saveCatalog error:', e);
       toast('พื้นที่จัดเก็บเต็ม — รูปภาพอาจไม่ถูกบันทึก ลองลบรูปพื้นหลังบาง JIG ออก', 'ng');
     }
-    pushToSupabase('catalog', catalog);
+    debouncedPush('catalog', () => pushCatalogToSupabase(catalog));
   }
 
   /* ══════════════════════════════════════
@@ -223,7 +345,7 @@
   function saveHistory(arr) {
     try {
       localStorage.setItem(SK.history, JSON.stringify(arr));
-      pushToSupabase('history', arr);
+      debouncedPush('history', () => pushHistoryToSupabase(arr));
       return true;
     } catch (e) {
       console.error('saveHistory error:', e);
@@ -266,7 +388,10 @@
      INIT
   ══════════════════════════════════════ */
   async function init() {
-    await pullFromSupabase(); // ดึงข้อมูลล่าสุดจากทีมมาก่อน แล้วค่อย render
+    // ดึงข้อมูลล่าสุดจากทีมมาก่อน แล้วค่อย render (ถ้ายังไม่เคย sync ขึ้นเลยจะได้ null แล้วใช้ local ต่อ)
+    const [remoteCat, remoteHist] = await Promise.all([pullCatalogFromSupabase(), pullHistoryFromSupabase()]);
+    if (remoteCat) localStorage.setItem(SK.catalog, JSON.stringify(remoteCat));
+    if (remoteHist) localStorage.setItem(SK.history, JSON.stringify(remoteHist));
     loadCatalog();
     $('inp-date').value = new Date().toISOString().slice(0, 10);
 
