@@ -1,0 +1,588 @@
+<!DOCTYPE html>
+<html lang="th" data-theme="light">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=5.0">
+  <title>ใบตรวจสอบสภาพจิ๊ก | JIG Inspection</title>
+  <script>
+    // ใช้ธีมที่เคยเลือกไว้ (ถ้ามี) ก่อนหน้า render เพื่อไม่ให้จอกระพริบ — ค่าเริ่มต้นคือธีมสว่าง
+    (function () {
+      try {
+        var saved = localStorage.getItem('jig_theme');
+        if (saved === 'dark' || saved === 'light') {
+          document.documentElement.setAttribute('data-theme', saved);
+        }
+      } catch (e) { /* localStorage ไม่พร้อมใช้งาน — ใช้ค่าเริ่มต้น */ }
+    })();
+  </script>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Noto+Sans+Thai:wght@300;400;500;600;700&family=Sarabun:wght@300;400;500;600;700&family=Outfit:wght@300;400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js"></script>
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/dompurify/3.1.6/purify.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  <link rel="stylesheet" href="style.css">
+</head>
+<body>
+<div class="app-container">
+
+  <!-- ─── HEADER ─── -->
+  <header class="app-header">
+    <div class="brand">
+      <div class="brand-logo">
+        <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round">
+          <path d="M14.7 6.3a1 1 0 0 0 0 1.4l1.6 1.6a1 1 0 0 0 1.4 0l3.77-3.77a6 6 0 0 1-7.94 7.94l-6.91 6.91a2.12 2.12 0 0 1-3-3l6.91-6.91a6 6 0 0 1 7.94-7.94l-3.76 3.76z"/>
+        </svg>
+      </div>
+      <div class="brand-text">
+        <h1 id="header-title">ใบรายงานการตรวจสอบสภาพจิ๊ก</h1>
+        <p id="header-sub">เลือกแผนก &rarr; Line &rarr; JIG เพื่อเริ่มตรวจสอบ</p>
+      </div>
+    </div>
+    <div class="header-actions">
+      <button id="btn-admin-toggle" class="btn-icon" title="Admin Panel">
+        <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="8" r="4"/><path d="M4 20c0-4 3.6-7 8-7s8 3 8 7"/></svg>
+      </button>
+      <button id="theme-toggle" class="btn-icon" title="สลับธีม">
+        <svg class="icon-moon" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2" style="display:none"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+        <svg class="icon-sun" viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><line x1="12" y1="1" x2="12" y2="3"/><line x1="12" y1="21" x2="12" y2="23"/><line x1="4.22" y1="4.22" x2="5.64" y2="5.64"/><line x1="18.36" y1="18.36" x2="19.78" y2="19.78"/><line x1="1" y1="12" x2="3" y2="12"/><line x1="21" y1="12" x2="23" y2="12"/><line x1="4.22" y1="19.78" x2="5.64" y2="18.36"/><line x1="18.36" y1="5.64" x2="19.78" y2="4.22"/></svg>
+      </button>
+    </div>
+  </header>
+
+  <!-- ─── TAB NAVIGATION ─── -->
+  <nav class="tab-nav">
+    <button class="tab-btn active" data-tab="inspect">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><polyline points="9 11 12 14 22 4"/><path d="M21 12v7a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11"/></svg>
+      ตรวจสอบ
+    </button>
+    <button class="tab-btn" data-tab="dashboard">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7"/><rect x="14" y="3" width="7" height="7"/><rect x="3" y="14" width="7" height="7"/><rect x="14" y="14" width="7" height="7"/></svg>
+      Dashboard
+    </button>
+    <button class="tab-btn" id="tab-history">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 3v5h5"/><path d="M3.05 13a9 9 0 1 0 .5-4.5L3 8"/><path d="M12 7v5l4 2"/></svg>
+      ประวัติ
+    </button>
+  </nav>
+
+  <!-- ─── VIEW: INSPECTION FORM ─── -->
+  <main class="dashboard" id="view-inspect">
+
+    <!-- ════════════════════════════════════
+         STEP 0 — 3-Level Filter Selector
+         ════════════════════════════════════ -->
+    <div class="glass-card filter-card" id="filter-card">
+      <h2 class="card-title"><span class="title-icon">🏭</span> เลือก JIG ที่ต้องการตรวจสอบ</h2>
+
+      <!-- Breadcrumb trail -->
+      <div class="breadcrumb-trail" id="breadcrumb">
+        <span class="bc-item active" data-level="0">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 9l9-7 9 7v11a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2z"/><polyline points="9 22 9 12 15 12 15 22"/></svg>
+          เริ่มต้น
+        </span>
+      </div>
+
+      <!-- Level 1: แผนก (Department) -->
+      <div class="filter-level" id="level-dept">
+        <div class="level-label">
+          <span class="level-num">1</span>
+          <span>เลือก <strong>แผนก</strong> (Department)</span>
+        </div>
+        <div class="filter-chips" id="chips-dept"></div>
+      </div>
+
+      <!-- Level 2: Line -->
+      <div class="filter-level hidden" id="level-line">
+        <div class="level-label">
+          <span class="level-num">2</span>
+          <span>เลือก <strong>Line</strong> การผลิต</span>
+        </div>
+        <div class="filter-chips" id="chips-line"></div>
+      </div>
+
+      <!-- Level 3: JIG -->
+      <div class="filter-level hidden" id="level-jig">
+        <div class="level-label">
+          <span class="level-num">3</span>
+          <span>เลือก <strong>JIG</strong> ที่ต้องการตรวจ</span>
+        </div>
+        <div class="jig-search-wrap">
+          <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+          <input type="text" id="jig-search" class="jig-search-input" placeholder="ค้นหา JIG ด้วยชื่อหรือรหัส..." autocomplete="off">
+          <button type="button" id="jig-search-clear" class="jig-search-clear hidden" aria-label="ล้างคำค้นหา">✕</button>
+        </div>
+        <div class="filter-chips" id="chips-jig"></div>
+      </div>
+
+      <!-- Selected JIG Info Banner -->
+      <div class="selected-jig-banner hidden" id="selected-banner">
+        <div class="sb-icon">🔧</div>
+        <div class="sb-info">
+          <div class="sb-name" id="sb-jig-name"></div>
+          <div class="sb-meta" id="sb-jig-meta"></div>
+        </div>
+        <button class="sb-change" id="btn-change-jig">เปลี่ยน JIG</button>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════
+         STEP 1 — Meta Info (ปรากฏหลัง select JIG)
+         ════════════════════════════════════ -->
+    <div class="glass-card meta-card hidden" id="meta-card">
+      <h2 class="card-title"><span class="title-icon">📋</span> ข้อมูลทั่วไป</h2>
+      <div class="meta-grid">
+        <div class="form-group">
+          <label for="inp-inspector">ผู้ตรวจสอบ</label>
+          <input type="text" id="inp-inspector" placeholder="ชื่อผู้ตรวจ">
+        </div>
+        <div class="form-group">
+          <label for="inp-date">วันที่ตรวจ</label>
+          <input type="date" id="inp-date">
+        </div>
+        <div class="form-group">
+          <label for="inp-shift">กะ</label>
+          <select id="inp-shift">
+            <option value="">เลือกกะ</option>
+            <option>กะ 1</option>
+            <option>กะ 2</option>
+            <option>กะ 3</option>
+          </select>
+        </div>
+        <div class="form-group">
+          <label for="inp-month">เดือน</label>
+          <select id="inp-month">
+            <option value="">เดือน</option>
+            <option>ม.ค.</option><option>ก.พ.</option><option>มี.ค.</option>
+            <option>เม.ย.</option><option>พ.ค.</option><option>มิ.ย.</option>
+            <option>ก.ค.</option><option>ส.ค.</option><option>ก.ย.</option>
+            <option>ต.ค.</option><option>พ.ย.</option><option>ธ.ค.</option>
+          </select>
+        </div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════
+         STEP 2 — SVG Map
+         ════════════════════════════════════ -->
+    <div class="glass-card map-card hidden" id="map-card">
+      <h2 class="card-title"><span class="title-icon">📍</span> แผนผังจุดตรวจสอบ JIG</h2>
+      <div class="jig-svg-wrap">
+        <svg id="jig-schematic" viewBox="0 0 600 340" preserveAspectRatio="xMidYMid meet">
+          <defs>
+            <linearGradient id="metal-grad" x1="0%" y1="0%" x2="100%" y2="100%">
+              <stop offset="0%" stop-color="var(--svg-metal-start)"/>
+              <stop offset="100%" stop-color="var(--svg-metal-end)"/>
+            </linearGradient>
+            <clipPath id="map-clip"><rect x="20" y="30" width="560" height="280" rx="12"/></clipPath>
+          </defs>
+          <rect x="20" y="30" width="560" height="280" rx="12" fill="var(--svg-base-bg)" stroke="var(--svg-border)" stroke-width="1.5"/>
+          <line x1="20" y1="170" x2="580" y2="170" stroke="var(--svg-center-line)" stroke-dasharray="6,4" stroke-width="1"/>
+          <!-- รูปพื้นหลังกำหนดเอง (ถ้า JIG นี้มีการอัปโหลดไว้) -->
+          <image id="svg-bg-image" x="20" y="30" width="560" height="280" preserveAspectRatio="xMidYMid slice" clip-path="url(#map-clip)" style="display:none" href=""/>
+          <!-- แผนผังเริ่มต้น (แสดงเมื่อยังไม่มีรูปพื้นหลังกำหนดเอง) -->
+          <g id="svg-default-drawing">
+            <path d="M 60 90 L 140 70 L 460 70 L 540 90 L 540 250 L 460 270 L 140 270 L 60 250 Z" fill="url(#metal-grad)" stroke="var(--svg-metal-border)" stroke-width="2"/>
+            <rect x="110" y="100" width="60" height="140" rx="4" fill="var(--svg-subplate)"/>
+            <rect x="270" y="100" width="60" height="140" rx="4" fill="var(--svg-subplate)"/>
+            <rect x="430" y="100" width="60" height="140" rx="4" fill="var(--svg-subplate)"/>
+            <line x1="140" y1="70" x2="140" y2="270" stroke="var(--svg-border)" stroke-width="1"/>
+            <line x1="460" y1="70" x2="460" y2="270" stroke="var(--svg-border)" stroke-width="1"/>
+            <rect x="30" y="152" width="28" height="36" rx="3" fill="var(--svg-subplate)" stroke="var(--svg-border)"/>
+          </g>
+          <text id="svg-jig-label" x="300" y="22" text-anchor="middle" fill="var(--text-muted)" font-size="11" font-family="Outfit">JIG SILL ASM FLOOR RR — JRG01 IM026</text>
+          <!-- จุดตรวจสอบ — สร้างแบบไดนามิกโดย JS ตามค่าที่ตั้งไว้ต่อ JIG -->
+          <g id="svg-points-group"></g>
+        </svg>
+      </div>
+      <div class="stats-mini-row">
+        <div class="stat-mini ok"><span class="num" id="stat-ok">0</span><span class="lbl">ปกติ (OK)</span></div>
+        <div class="stat-mini ng"><span class="num" id="stat-ng">0</span><span class="lbl">ไม่ปกติ (NG)</span></div>
+        <div class="stat-mini pending"><span class="num" id="stat-pending">10</span><span class="lbl">คงเหลือ</span></div>
+      </div>
+    </div>
+
+    <!-- ════════════════════════════════════
+         STEP 3 — Checklist
+         ════════════════════════════════════ -->
+    <div class="glass-card checklist-card hidden" id="checklist-card">
+      <div class="card-header-flex">
+        <h2 class="card-title"><span class="title-icon">🔍</span> รายการตรวจสอบ</h2>
+        <div class="legend-row">
+          <span class="badge ok">✔ ปกติ</span>
+          <span class="badge ng">✖ NG</span>
+          <span class="badge fixed">🔧 แก้ไขแล้ว</span>
+        </div>
+      </div>
+      <div id="checklist-wrapper"></div>
+    </div>
+
+    <!-- ════════════════════════════════════
+         STEP 4 — Notes + Signatures
+         ════════════════════════════════════ -->
+    <div class="glass-card notes-card hidden" id="notes-card">
+      <h2 class="card-title"><span class="title-icon">📝</span> หมายเหตุเพิ่มเติม</h2>
+      <textarea id="report-notes" class="note-area" placeholder="ระบุรายละเอียดเพิ่มเติม..."></textarea>
+    </div>
+
+    <div class="glass-card sig-card hidden" id="sig-card">
+      <h2 class="card-title"><span class="title-icon">✍️</span> ลายเซ็นรับรอง (พิมพ์ชื่อ)</h2>
+      <div class="sig-row">
+        <div class="sig-block">
+          <label>ผู้ตรวจสอบ</label>
+          <input type="text" id="sig-inspector" class="sig-text-input" placeholder="พิมพ์ชื่อผู้ตรวจสอบ">
+        </div>
+        <div class="sig-block">
+          <label>หัวหน้างาน</label>
+          <input type="text" id="sig-supervisor" class="sig-text-input" placeholder="พิมพ์ชื่อหัวหน้างาน">
+        </div>
+      </div>
+    </div>
+
+    <!-- Action Buttons -->
+    <div class="btn-row hidden" id="action-row">
+      <button id="btn-submit" class="btn-submit">💾 บันทึกผลการตรวจ</button>
+      <button id="btn-reset" class="btn-sec">🔄 เริ่มใหม่</button>
+    </div>
+
+  </main>
+
+  <!-- ─── VIEW: DASHBOARD ─── -->
+  <div id="view-dashboard" class="hidden">
+
+    <!-- Month filter + live clock -->
+    <div class="dash-filter-row">
+      <div class="dash-filter-left">
+        <label for="dash-month-filter">📅 ดูข้อมูลเดือน:</label>
+        <select id="dash-month-filter">
+          <option value="all">ทั้งหมด (All)</option>
+        </select>
+      </div>
+      <div class="dash-live-clock">
+        <span class="live-dot"></span>
+        <span id="dash-clock-date"></span>
+        <span id="dash-clock-time"></span>
+      </div>
+    </div>
+
+    <!-- KPI Row -->
+    <div class="kpi-row">
+      <div class="kpi-card" id="kpi-total">
+        <div class="kpi-icon">📋</div>
+        <div class="kpi-body">
+          <div class="kpi-num" id="kpi-n-total">0</div>
+          <div class="kpi-lbl">ตรวจสอบทั้งหมด</div>
+        </div>
+      </div>
+      <div class="kpi-card ok" id="kpi-pass">
+        <div class="kpi-icon">✅</div>
+        <div class="kpi-body">
+          <div class="kpi-num" id="kpi-n-pass">0%</div>
+          <div class="kpi-lbl">อัตราผ่าน (Pass Rate)</div>
+        </div>
+      </div>
+      <div class="kpi-card ng" id="kpi-ng">
+        <div class="kpi-icon">⚠️</div>
+        <div class="kpi-body">
+          <div class="kpi-num" id="kpi-n-ng">0</div>
+          <div class="kpi-lbl">รายการ NG ทั้งหมด</div>
+        </div>
+      </div>
+      <div class="kpi-card accent" id="kpi-jig">
+        <div class="kpi-icon">🔧</div>
+        <div class="kpi-body">
+          <div class="kpi-num" id="kpi-n-jig">0</div>
+          <div class="kpi-lbl">JIG ที่ตรวจแล้ว</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Charts Row -->
+    <div class="chart-row">
+      <!-- Trend -->
+      <div class="glass-card chart-card chart-wide">
+        <div class="card-header-flex">
+          <h2 class="card-title"><span class="title-icon">📈</span> <span id="trend-title-text">แนวโน้มการตรวจสอบ (30 วัน)</span></h2>
+          <span class="chart-legend">
+            <span class="cl-dot ok"></span>ผ่าน
+            <span class="cl-dot ng"></span>NG
+          </span>
+        </div>
+        <div class="chart-wrap"><canvas id="chart-trend"></canvas></div>
+      </div>
+    </div>
+
+    <div class="chart-row">
+      <!-- NG by Line -->
+      <div class="glass-card chart-card">
+        <h2 class="card-title"><span class="title-icon">🏭</span> NG ตาม Line</h2>
+        <div class="chart-wrap"><canvas id="chart-byline"></canvas></div>
+      </div>
+      <!-- Pass rate donut by Dept -->
+      <div class="glass-card chart-card">
+        <h2 class="card-title"><span class="title-icon">🍩</span> อัตราผ่านตามแผนก</h2>
+        <div class="chart-wrap chart-donut-wrap"><canvas id="chart-dept"></canvas></div>
+        <div id="donut-legend" class="donut-legend"></div>
+      </div>
+    </div>
+
+    <!-- Top NG Checkpoints -->
+    <div class="glass-card">
+      <h2 class="card-title"><span class="title-icon">🔴</span> จุดตรวจที่พบ NG บ่อยที่สุด</h2>
+      <div id="ng-ranking"></div>
+    </div>
+
+    <!-- AI Analysis -->
+    <div class="glass-card ai-card">
+      <div class="ai-card-head">
+        <div>
+          <h2 class="card-title" style="margin-bottom:4px"><span class="title-icon">🤖</span> AI วิเคราะห์ข้อมูล</h2>
+          <p class="ai-subtitle">วิเคราะห์ pattern NG, แนวโน้ม, และคำแนะนำเชิงป้องกัน</p>
+        </div>
+        <div class="ai-btn-group">
+          <button id="btn-ai-analyze" class="btn-ai">
+            <span class="ai-btn-icon">✨</span> วิเคราะห์ด้วย AI
+          </button>
+          <button id="btn-ai-key" class="btn-ai-sec" title="ตั้งค่า Gemini API Key">
+            <svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="3"/><path d="M19.07 4.93a10 10 0 0 1 0 14.14M4.93 19.07a10 10 0 0 1 0-14.14"/></svg>
+            API Key
+          </button>
+        </div>
+      </div>
+      <div id="ai-result" class="ai-result">
+        <div class="ai-placeholder">
+          <div class="ai-ph-icon">🤖</div>
+          <div class="ai-ph-text">กดปุ่ม <strong>"วิเคราะห์ด้วย AI"</strong> เพื่อรับรายงานวิเคราะห์<br>จากข้อมูลการตรวจสอบทั้งหมด</div>
+        </div>
+      </div>
+    </div>
+
+  </div>
+
+  <!-- ─── AI API KEY MODAL ─── -->
+  <div id="ai-key-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>🔑 Gemini API Key</h3>
+        <button id="btn-modal-close" class="btn-close-panel">✕</button>
+      </div>
+      <p class="modal-desc">ใส่ Gemini API Key เพื่อใช้ AI วิเคราะห์ขั้นสูง<br>หากไม่มีจะใช้ Smart Analysis แทน (ไม่ต้องการ internet)</p>
+      <div class="modal-inp-row">
+        <input type="password" id="inp-api-key" placeholder="AIza..." autocomplete="off">
+        <button id="btn-save-key" class="btn-adm-add">บันทึก</button>
+      </div>
+      <p class="modal-warn">⚠️ API Key จะถูกเก็บไว้ในเบราว์เซอร์นี้เท่านั้น (localStorage) แบบไม่เข้ารหัส — ไม่ควรใช้บนเครื่องสาธารณะ/เครื่องที่ใช้ร่วมกัน และห้ามแชร์ Key นี้ให้ผู้อื่น</p>
+      <p class="modal-hint">รับ API Key ฟรีที่ <a href="https://aistudio.google.com" target="_blank" style="color:var(--accent)">aistudio.google.com</a></p>
+    </div>
+  </div>
+
+  <!-- ─── ADMIN PANEL (Slide-in) ─── -->
+  <div id="admin-panel" class="side-panel">
+    <div class="panel-resize-handle" id="admin-resize-handle" title="ลากเพื่อปรับขนาด (ดับเบิลคลิกเพื่อรีเซ็ต)"></div>
+    <div class="panel-head">
+      <h2>⚙️ Admin Panel — จัดการระบบ</h2>
+      <button id="btn-close-admin" class="btn-close-panel">✕</button>
+    </div>
+    
+    <!-- Change Password -->
+    <div class="admin-section">
+      <div class="admin-section-title">🔑 เปลี่ยนรหัสผ่าน Admin</div>
+      <div class="admin-input-row">
+        <input type="password" id="adm-new-pass" placeholder="รหัสผ่านใหม่">
+        <button class="btn-adm-add" id="btn-adm-pass">เปลี่ยน</button>
+      </div>
+    </div>
+
+    <!-- Add Department -->
+    <div class="admin-section">
+      <div class="admin-section-title">🏭 เพิ่มแผนก</div>
+      <div class="admin-input-row">
+        <input type="text" id="adm-dept-id" placeholder="รหัส (เช่น BODY)">
+        <input type="text" id="adm-dept-name" placeholder="ชื่อแผนก (เช่น แผนก Body)">
+        <button class="btn-adm-add" id="btn-adm-dept">เพิ่ม</button>
+      </div>
+      <div class="admin-list" id="adm-dept-list"></div>
+    </div>
+
+    <!-- Add Line -->
+    <div class="admin-section">
+      <div class="admin-section-title">🔗 เพิ่ม Line</div>
+      <div class="admin-input-row">
+        <select id="adm-line-dept" class="adm-sel"><option value="">เลือกแผนก</option></select>
+        <input type="text" id="adm-line-id" placeholder="รหัส (เช่น L1)">
+        <input type="text" id="adm-line-name" placeholder="ชื่อ Line (เช่น Line 1)">
+        <button class="btn-adm-add" id="btn-adm-line">เพิ่ม</button>
+      </div>
+      <div class="admin-list admin-list-scroll" id="adm-line-list"></div>
+    </div>
+
+    <!-- Add JIG -->
+    <div class="admin-section">
+      <div class="admin-section-title">🔧 เพิ่ม JIG</div>
+      <div class="admin-input-row">
+        <select id="adm-jig-dept" class="adm-sel"><option value="">แผนก</option></select>
+        <select id="adm-jig-line" class="adm-sel"><option value="">Line</option></select>
+        <input type="text" id="adm-jig-id" placeholder="รหัส JIG (เช่น JRG01)">
+        <input type="text" id="adm-jig-name" placeholder="ชื่อ JIG">
+        <button class="btn-adm-add" id="btn-adm-jig">เพิ่ม</button>
+      </div>
+      <div class="admin-search-row">
+        <input type="text" id="adm-jig-search" placeholder="🔍 ค้นหา JIG (ชื่อ/รหัส/Line)...">
+        <span id="adm-jig-count" class="admin-search-count"></span>
+      </div>
+      <div class="admin-list admin-list-scroll" id="adm-jig-list" style="max-height:340px"></div>
+    </div>
+
+    <!-- Manage Checkpoints -->
+    <div class="admin-section">
+      <div class="admin-section-title">📍 จัดการจุดตรวจสอบ (แยกตาม JIG)</div>
+      <div class="admin-input-row">
+        <select id="adm-cp-jig" class="adm-sel" style="flex:1"><option value="">เลือก JIG เพื่อแก้ไขจุดตรวจ...</option></select>
+      </div>
+      <div id="adm-cp-editor" class="hidden" style="margin-top:10px; background:var(--bg-input); padding:10px; border-radius:8px; border:1px solid var(--border-input);">
+
+        <!-- รูปพื้นหลังแผนผัง -->
+        <div class="cp-bg-row">
+          <label class="btn-camera cp-bg-upload">
+            <input type="file" accept="image/*" id="adm-cp-bg-input" class="file-input">
+            🖼️ อัปโหลด/เปลี่ยนรูปพื้นหลัง
+          </label>
+          <button id="btn-cp-bg-remove" class="btn-danger-sm hidden">🗑 ลบรูปพื้นหลัง</button>
+        </div>
+        <div class="cp-bg-status" id="cp-bg-status"></div>
+
+        <!-- แผนผังลากจุดตรวจสอบ -->
+        <div class="cp-map-wrap">
+          <svg id="adm-cp-map" viewBox="0 0 600 340" preserveAspectRatio="xMidYMid meet">
+            <defs>
+              <clipPath id="map-clip-adm"><rect x="20" y="30" width="560" height="280" rx="12"/></clipPath>
+              <pattern id="adm-grid" width="20" height="20" patternUnits="userSpaceOnUse">
+                <path d="M 20 0 L 0 0 0 20" fill="none" stroke="var(--svg-border)" stroke-width="0.5"/>
+              </pattern>
+            </defs>
+            <rect x="20" y="30" width="560" height="280" rx="12" fill="var(--svg-base-bg)" stroke="var(--svg-border)" stroke-width="1.5"/>
+            <rect x="20" y="30" width="560" height="280" rx="12" fill="url(#adm-grid)"/>
+            <image id="adm-cp-bg-image" x="20" y="30" width="560" height="280" preserveAspectRatio="xMidYMid slice" clip-path="url(#map-clip-adm)" style="display:none" href=""/>
+            <g id="adm-cp-points-group"></g>
+          </svg>
+          <div class="cp-map-hint">💡 ลากจุดบนแผนผังเพื่อจัดตำแหน่ง</div>
+        </div>
+
+        <!-- เทมเพลตหัวข้อตรวจสอบ — ใช้ซ้ำข้ามหลาย JIG โดยไม่ต้องพิมพ์ใหม่ทุกครั้ง -->
+        <div class="cp-tpl-box">
+          <div style="font-size:11px; margin-bottom:6px; color:var(--text-muted)">📋 เทมเพลตหัวข้อตรวจสอบ (ใช้ซ้ำกับหลาย JIG ได้)</div>
+          <select id="adm-tpl-select" class="adm-sel" style="width:100%; margin-bottom:8px"><option value="">เลือกเทมเพลตที่จะนำเข้า...</option></select>
+
+          <div id="adm-tpl-preview" class="tpl-preview hidden">
+            <div class="tpl-preview-head">
+              <span id="tpl-preview-count">เลือก 0 หัวข้อ</span>
+              <span class="tpl-preview-toggle-all">
+                <button type="button" id="btn-tpl-select-all" class="tpl-mini-link">เลือกทั้งหมด</button> /
+                <button type="button" id="btn-tpl-select-none" class="tpl-mini-link">ไม่เลือกเลย</button>
+              </span>
+            </div>
+            <div id="adm-tpl-items" class="tpl-item-checklist"></div>
+            <button id="btn-tpl-apply" class="btn-adm-add" style="width:100%; margin-top:8px">📥 นำเข้าหัวข้อที่เลือก</button>
+          </div>
+
+          <button id="btn-tpl-save" class="btn-sec" style="width:100%; margin-top:8px">💾 บันทึกหัวข้อของ JIG นี้เป็นเทมเพลตใหม่</button>
+          <div class="admin-list" id="adm-tpl-list" style="margin-top:8px"></div>
+        </div>
+
+        <div style="font-size:11px; margin:10px 0 8px; color:var(--text-muted)">เพิ่มจุดตรวจใหม่ (จะปรากฏกลางแผนผัง — ลากเพื่อจัดตำแหน่งภายหลัง)</div>
+        <div class="admin-input-row" style="margin-bottom:6px">
+          <input type="text" id="adm-cp-label" placeholder="ชื่อจุด (เช่น L-Pin)" style="flex:2">
+          <input type="text" id="adm-cp-sub" placeholder="เกณฑ์ (เช่น ไม่หลวม)" style="flex:2">
+        </div>
+        <div class="admin-input-row">
+          <input type="text" id="adm-cp-method" placeholder="วิธีตรวจ (สายตา/จับ)" style="flex:2">
+          <button class="btn-adm-add" id="btn-adm-cp">+ เพิ่มจุดตรวจ</button>
+        </div>
+        <div class="admin-list admin-list-scroll" id="adm-cp-list" style="margin-top:10px;"></div>
+      </div>
+    </div>
+
+    <!-- Export / Import backup -->
+    <div class="admin-section">
+      <div class="admin-section-title">💾 สำรองข้อมูล (Backup)</div>
+      <button id="btn-export-data" class="btn-sec" style="width:100%">⬇️ Export ข้อมูลทั้งหมด (.json)</button>
+      <label class="btn-sec" style="width:100%; display:flex; align-items:center; justify-content:center; margin-top:8px; cursor:pointer; box-sizing:border-box;">
+        ⬆️ Import ข้อมูล (.json)
+        <input type="file" id="inp-import-data" accept=".json,application/json" class="file-input" style="display:none">
+      </label>
+      <div style="font-size:11px; color:var(--text-muted); margin-top:6px; line-height:1.5;">
+        Export เก็บทั้ง Catalog (แผนก/Line/JIG/จุดตรวจ) และประวัติการตรวจ — ใช้สำรองก่อนล้าง browser cache หรือย้ายเครื่อง
+      </div>
+    </div>
+
+    <!-- Seed demo data -->
+    <div class="admin-section">
+      <button id="btn-seed-demo" class="btn-seed">🌱 โหลดข้อมูล JIG โรงงาน (183 JIG)</button>
+      <button id="btn-seed-history" class="btn-sec" style="width:100%; margin-top:8px;">📊 สร้างประวัติจำลอง (Mock History)</button>
+      <button id="btn-clear-all" class="btn-danger-sm" style="margin-top:12px;">🗑 ล้างข้อมูลทั้งหมด</button>
+    </div>
+
+    <!-- Sticky Save-All confirmation bar -->
+    <div class="admin-save-bar">
+      <button id="btn-save-all" class="btn-save-all">💾 บันทึกข้อมูลทั้งหมด</button>
+      <span class="admin-save-note">ทุกครั้งที่กด "เพิ่ม" ระบบบันทึกให้อัตโนมัติแล้ว — ปุ่มนี้ไว้ยืนยันอีกครั้งก่อนปิดหน้าต่าง</span>
+    </div>
+  </div>
+
+  <!-- ─── HISTORY PANEL ─── -->
+  <div id="history-panel" class="side-panel">
+    <div class="panel-head">
+      <h2>📂 ประวัติการตรวจย้อนหลัง</h2>
+      <button id="btn-close-hist" class="btn-close-panel">✕</button>
+    </div>
+    <div class="hist-toolbar">
+      <div class="hf"><label>จาก</label><input type="date" id="hf-start"></div>
+      <div class="hf"><label>ถึง</label><input type="date" id="hf-end"></div>
+      <div class="hf">
+        <label>แผนก</label>
+        <select id="hf-dept"><option value="">ทั้งหมด</option></select>
+      </div>
+      <div class="hf">
+        <label>กะ</label>
+        <select id="hf-shift"><option value="">ทั้งหมด</option><option>กะ 1</option><option>กะ 2</option><option>กะ 3</option></select>
+      </div>
+      <button id="btn-hf-apply" class="btn-filter">🔍 กรอง</button>
+      <button id="btn-hf-clear" class="btn-clear-filter">ล้าง</button>
+      <button id="btn-hf-pdf" class="btn-export-pdf">📄 PDF</button>
+    </div>
+    <div class="hist-summary" id="hist-summary"></div>
+    <div id="hist-list"></div>
+  </div>
+
+  <!-- ─── OVERLAY (backdrop for panels) ─── -->
+  <div id="panel-overlay" class="panel-overlay"></div>
+
+  <!-- ─── TOAST ─── -->
+  <div id="toast" class="toast"></div>
+
+  <div id="lightbox" class="lightbox">
+    <button class="lightbox-close">✕</button>
+    <img id="lightbox-img" src="" alt="">
+  </div>
+
+  <!-- ─── ADMIN LOGIN MODAL ─── -->
+  <div id="admin-login-modal" class="modal-overlay hidden">
+    <div class="modal-box">
+      <div class="modal-head">
+        <h3>🔒 เข้าสู่ระบบ Admin</h3>
+        <button id="btn-close-login" class="btn-close-panel">✕</button>
+      </div>
+      <div class="modal-inp-row">
+        <input type="password" id="inp-admin-pass" placeholder="รหัสผ่าน">
+        <button id="btn-login-submit" class="btn-adm-add">เข้าสู่ระบบ</button>
+      </div>
+      <p class="modal-hint" id="hint-default-pass" style="color:var(--text-muted)">รหัสผ่านเริ่มต้นคือ admin1234</p>
+    </div>
+  </div>
+
+</div>
+<script src="app.js"></script>
+</body>
+</html>
